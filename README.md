@@ -39,6 +39,8 @@ brew tap dail8859/notepadnext
 brew install --no-quarantine notepadnext
 ```
 
+To build a local macOS installer disk image from source, see [doc/MacOS-DMG.md](/doc/MacOS-DMG.md).
+
 #### MacOS Tweaks
 
 By default, MacOS enables font smoothing which causes text to appear quite differently from the Windows version. This can be disabled system-wide using the following command:
