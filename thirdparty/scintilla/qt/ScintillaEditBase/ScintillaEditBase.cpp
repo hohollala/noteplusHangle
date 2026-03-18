@@ -36,7 +36,7 @@ using namespace Scintilla;
 using namespace Scintilla::Internal;
 
 ScintillaEditBase::ScintillaEditBase(QWidget *parent)
-: QAbstractScrollArea(parent), sqt(new ScintillaQt(this)), preeditPos(-1), wheelDelta(0)
+: QAbstractScrollArea(parent), sqt(new ScintillaQt(this)), preeditPos(-1), imeEscapeKeyPending(false), wheelDelta(0)
 {
 	time.start();
 
@@ -201,6 +201,8 @@ void ScintillaEditBase::resizeEvent(QResizeEvent *)
 
 void ScintillaEditBase::keyPressEvent(QKeyEvent *event)
 {
+	imeEscapeKeyPending = (event->key() == Qt::Key_Escape) && !preeditString.isEmpty();
+
 	// All keystrokes containing the meta modifier are
 	// assumed to be shortcuts not handled by scintilla.
 	if (QApplication::keyboardModifiers() & Qt::MetaModifier) {
@@ -464,6 +466,18 @@ int GetImeCaretPos(QInputMethodEvent *event)
 	return 0;
 }
 
+QString RemoveImeControlCharacters(const QString &text)
+{
+	QString filtered;
+	filtered.reserve(text.size());
+	for (int i = 0; i < text.size(); i++) {
+		const QChar ch = text.at(i);
+		if (ch.category() != QChar::Other_Control)
+			filtered.append(ch);
+	}
+	return filtered;
+}
+
 std::vector<int> MapImeIndicators(QInputMethodEvent *event)
 {
 	std::vector<int> imeIndicator(event->preeditString().size(), IndicatorUnknown);
@@ -523,6 +537,8 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 	}
 
 	const QString previousPreeditString = preeditString;
+	const bool escapeKeyPressedDuringPreedit = imeEscapeKeyPending;
+	imeEscapeKeyPending = false;
 
 	bool initialCompose = false;
 	if (sqt->pdoc->TentativeActive()) {
@@ -548,32 +564,35 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 		sqt->pdoc->DeleteChars(start, end - start);
 	}
 
-	if (!event->commitString().isEmpty()) {
-		const QString &commitStr = event->commitString();
-		const bool preservePreviousPreedit =
-			!previousPreeditString.isEmpty() &&
-			event->preeditString().isEmpty() &&
-			rpLength == 0 &&
-			!commitStr.startsWith(previousPreeditString);
+	const QString rawCommitStr = event->commitString();
+	const QString commitStr = RemoveImeControlCharacters(rawCommitStr);
+	const bool commitHadOnlyControlChars = !rawCommitStr.isEmpty() && commitStr.isEmpty();
+	const bool preservePreviousPreedit =
+		!previousPreeditString.isEmpty() &&
+		event->preeditString().isEmpty() &&
+		rpLength == 0 &&
+		(commitHadOnlyControlChars ||
+		 (escapeKeyPressedDuringPreedit && rawCommitStr.isEmpty()) ||
+		 (!commitStr.isEmpty() && !commitStr.startsWith(previousPreeditString)));
 
-		const auto insertQString = [&](const QString &text) {
-			const int textLen = text.length();
-			for (int i = 0; i < textLen;) {
-				const int ucWidth = text.at(i).isHighSurrogate() ? 2 : 1;
-				const QString oneCharUTF16 = text.mid(i, ucWidth);
-				const QByteArray oneChar = sqt->BytesForDocument(oneCharUTF16);
+	const auto insertQString = [&](const QString &text) {
+		const int textLen = text.length();
+		for (int i = 0; i < textLen;) {
+			const int ucWidth = text.at(i).isHighSurrogate() ? 2 : 1;
+			const QString oneCharUTF16 = text.mid(i, ucWidth);
+			const QByteArray oneChar = sqt->BytesForDocument(oneCharUTF16);
 
-				sqt->InsertCharacter(std::string_view(oneChar.data(), oneChar.length()), CharacterSource::DirectInput);
-				i += ucWidth;
-			}
-		};
-
-		if (preservePreviousPreedit) {
-			insertQString(previousPreeditString);
+			sqt->InsertCharacter(std::string_view(oneChar.data(), oneChar.length()), CharacterSource::DirectInput);
+			i += ucWidth;
 		}
+	};
 
+	if (preservePreviousPreedit) {
+		insertQString(previousPreeditString);
+	}
+
+	if (!commitStr.isEmpty()) {
 		insertQString(commitStr);
-
 	} else if (!event->preeditString().isEmpty()) {
 		const QString preeditStr = event->preeditString();
 		const int preeditStrLen = preeditStr.length();

@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QInputMethodEvent>
+#include <QKeyEvent>
 
 #include <cstdio>
 
@@ -49,6 +50,52 @@ int VerifyHangulFollowedByCommit(const QString &commitText, const QByteArray &ex
     return 0;
 }
 
+int VerifyEscapeCommitPreservesPreedit() {
+    ScintillaEdit editor;
+    editor.setCodePage(SC_CP_UTF8);
+    const QByteArray baseText = QString::fromUtf8(u8"가나").toUtf8();
+    const QByteArray expectedText = QString::fromUtf8(u8"가나다").toUtf8();
+    editor.setText(baseText.constData());
+    editor.gotoPos(editor.length());
+
+    QInputMethodEvent preedit = HangulPreeditEvent(QString::fromUtf8(u8"다"));
+    QApplication::sendEvent(&editor, &preedit);
+
+    QInputMethodEvent commit;
+    commit.setCommitString(QString(QChar(0x001b)), 0, 0);
+    QApplication::sendEvent(&editor, &commit);
+
+    const QByteArray actualText = TextOf(editor);
+    if (actualText != expectedText) {
+        return FailText("escape commit should preserve the current hangul syllable without inserting ESC", expectedText, actualText);
+    }
+    return 0;
+}
+
+int VerifyEscapeKeyFollowedByEmptyImeEventPreservesPreedit() {
+    ScintillaEdit editor;
+    editor.setCodePage(SC_CP_UTF8);
+    const QByteArray baseText = QString::fromUtf8(u8"가나").toUtf8();
+    const QByteArray expectedText = QString::fromUtf8(u8"가나다").toUtf8();
+    editor.setText(baseText.constData());
+    editor.gotoPos(editor.length());
+
+    QInputMethodEvent preedit = HangulPreeditEvent(QString::fromUtf8(u8"다"));
+    QApplication::sendEvent(&editor, &preedit);
+
+    QKeyEvent escapeKey(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&editor, &escapeKey);
+
+    QInputMethodEvent clearComposition;
+    QApplication::sendEvent(&editor, &clearComposition);
+
+    const QByteArray actualText = TextOf(editor);
+    if (actualText != expectedText) {
+        return FailText("escape key followed by empty IME event should preserve the current hangul syllable", expectedText, actualText);
+    }
+    return 0;
+}
+
 }
 
 int main(int argc, char **argv) {
@@ -86,6 +133,12 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (VerifyHangulFollowedByCommit(QString::fromUtf8(u8"라"), committedHangul) != 0) {
+        return 1;
+    }
+    if (VerifyEscapeCommitPreservesPreedit() != 0) {
+        return 1;
+    }
+    if (VerifyEscapeKeyFollowedByEmptyImeEventPreservesPreedit() != 0) {
         return 1;
     }
 

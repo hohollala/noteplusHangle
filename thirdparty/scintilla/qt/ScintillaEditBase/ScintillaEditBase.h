@@ -158,6 +158,7 @@ private:
 
 	Scintilla::Position preeditPos;
 	QString preeditString;
+	bool imeEscapeKeyPending;
 
 	int wheelDelta;
 
