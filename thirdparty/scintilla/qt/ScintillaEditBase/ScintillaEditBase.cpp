@@ -522,6 +522,8 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 		return;
 	}
 
+	const QString previousPreeditString = preeditString;
+
 	bool initialCompose = false;
 	if (sqt->pdoc->TentativeActive()) {
 		sqt->pdoc->TentativeUndo();
@@ -533,6 +535,7 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 
 	sqt->view.imeCaretBlockOverride = false;
 	preeditPos = -1; // reset not to interrupt Qt::ImCursorRectangle.
+	preeditString.clear();
 
 	const int rpLength = event->replacementLength();
 	if (rpLength != 0) {
@@ -547,16 +550,29 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 
 	if (!event->commitString().isEmpty()) {
 		const QString &commitStr = event->commitString();
-		const int commitStrLen = commitStr.length();
+		const bool preservePreviousPreedit =
+			!previousPreeditString.isEmpty() &&
+			event->preeditString().isEmpty() &&
+			rpLength == 0 &&
+			!commitStr.startsWith(previousPreeditString);
 
-		for (int i = 0; i < commitStrLen;) {
-			const int ucWidth = commitStr.at(i).isHighSurrogate() ? 2 : 1;
-			const QString oneCharUTF16 = commitStr.mid(i, ucWidth);
-			const QByteArray oneChar = sqt->BytesForDocument(oneCharUTF16);
+		const auto insertQString = [&](const QString &text) {
+			const int textLen = text.length();
+			for (int i = 0; i < textLen;) {
+				const int ucWidth = text.at(i).isHighSurrogate() ? 2 : 1;
+				const QString oneCharUTF16 = text.mid(i, ucWidth);
+				const QByteArray oneChar = sqt->BytesForDocument(oneCharUTF16);
 
-			sqt->InsertCharacter(std::string_view(oneChar.data(), oneChar.length()), CharacterSource::DirectInput);
-			i += ucWidth;
+				sqt->InsertCharacter(std::string_view(oneChar.data(), oneChar.length()), CharacterSource::DirectInput);
+				i += ucWidth;
+			}
+		};
+
+		if (preservePreviousPreedit) {
+			insertQString(previousPreeditString);
 		}
+
+		insertQString(commitStr);
 
 	} else if (!event->preeditString().isEmpty()) {
 		const QString preeditStr = event->preeditString();
@@ -572,6 +588,7 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 
 		// Fix candidate window position at the start of preeditString.
 		preeditPos = sqt->CurrentPosition();
+		preeditString = preeditStr;
 
 		std::vector<int> imeIndicator = MapImeIndicators(event);
 
@@ -595,12 +612,6 @@ void ScintillaEditBase::inputMethodEvent(QInputMethodEvent *event)
 		sqt->MoveImeCarets(- sqt->CurrentPosition() + imeCaretPosDoc);
 
 		if (IsHangul(preeditStr.at(0))) {
-#ifndef Q_OS_WIN
-			if (imeCaretPos > 0) {
-				int oneCharBefore = sqt->pdoc->GetRelativePosition(sqt->CurrentPosition(), -1);
-				sqt->MoveImeCarets(- sqt->CurrentPosition() + oneCharBefore);
-			}
-#endif
 			sqt->view.imeCaretBlockOverride = true;
 		}
 		sqt->EnsureCaretVisible();
